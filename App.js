@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import * as Location from 'expo-location';
 import {
   StyleSheet, Text, View, ScrollView, TouchableOpacity,
   TextInput, Platform, StatusBar, ActivityIndicator,
@@ -113,17 +114,73 @@ function smartRadius(place, types) {
   return 900;
 }
 
+// Maps each keyword to a specific Google Places search term
+const KW_QUERY_MAP = {
+  'Burgers':        'burger restaurant',
+  'Fried Chicken':  'fried chicken',
+  'Pizza':          'pizza restaurant',
+  'Pie':            'pie shop bakery',
+  'Fish & Chips':   'fish and chips',
+  'Tacos':          'tacos mexican',
+  'Dumplings':      'dumplings chinese restaurant',
+  'Ramen':          'ramen japanese',
+  'Pasta':          'pasta italian restaurant',
+  'Steak':          'steak restaurant',
+  'Seafood':        'seafood restaurant',
+  'Vegan':          'vegan restaurant cafe',
+  'Dessert':        'dessert cafe bakery',
+  'Coffee':         'cafe coffee',
+  'Cocktails':      'cocktail bar',
+  'Cheap Eats':     'casual dining cheap eats',
+  'BYO':            'BYO restaurant',
+  'Date Night':     'restaurant dinner',
+  'Family Friendly':'family restaurant cafe',
+};
+
+const MEAL_QUERY_MAP = {
+  'Breakfast':       'breakfast cafe',
+  'Brunch':          'brunch cafe',
+  'Lunch':           'lunch cafe restaurant',
+  'Dinner':          'dinner restaurant',
+  'Coffee & Snacks': 'cafe coffee',
+  'Late Night':      'late night restaurant',
+};
+
+// Google Place types to EXCLUDE based on keywords/meal
+const KW_EXCLUDE_TYPES = {
+  'Family Friendly': ['bar','night_club','liquor_store'],
+  'Breakfast':       ['bar','night_club'],
+  'Brunch':          ['bar','night_club'],
+  'Coffee & Snacks': ['bar','night_club'],
+  'Burgers':         ['night_club'],
+  'Pizza':           ['night_club'],
+  'Vegan':           ['night_club'],
+};
+
+function getExcludeTypes(meal, keywords) {
+  const excluded = new Set();
+  if (meal && KW_EXCLUDE_TYPES[meal]) KW_EXCLUDE_TYPES[meal].forEach(t => excluded.add(t));
+  (keywords || []).forEach(k => {
+    if (KW_EXCLUDE_TYPES[k]) KW_EXCLUDE_TYPES[k].forEach(t => excluded.add(t));
+  });
+  return excluded;
+}
+
 function buildQuery(meal, foodStyles, keywords) {
-  const mealMap = {
-    'Breakfast':'breakfast cafe','Brunch':'brunch cafe','Lunch':'lunch cafe restaurant',
-    'Dinner':'dinner restaurant','Coffee & Snacks':'cafe coffee','Late Night':'bar restaurant',
-  };
   const parts = [];
-  if (meal && mealMap[meal]) parts.push(mealMap[meal]);
+  // Keywords take priority — they are the most specific signal
+  if (keywords?.length) {
+    keywords.forEach(k => {
+      if (KW_QUERY_MAP[k]) parts.push(KW_QUERY_MAP[k]);
+    });
+  }
+  // Food styles next
   if (foodStyles?.length) parts.push(...foodStyles);
-  if (keywords?.length) parts.push(...keywords.slice(0, 2));
+  // Meal type if nothing else
+  if (!parts.length && meal && MEAL_QUERY_MAP[meal]) parts.push(MEAL_QUERY_MAP[meal]);
   if (!parts.length) parts.push('cafe restaurant food');
-  return parts.join(' ');
+  // Return the most specific query (first keyword match)
+  return parts[0] || 'cafe restaurant food';
 }
 
 // ─── API CALLS ────────────────────────────────────────────────────────────────
@@ -169,8 +226,16 @@ async function foursquareSearch(lat, lng, query, radius) {
 
 async function geminiDescribe(places, location, meal, keywords, foodStyles) {
   const kwList = [...(keywords || []), ...(foodStyles || [])].filter(Boolean);
-  const mealLine = meal ? `CRITICAL: Only include places suitable for ${meal}. Skip unsuitable ones.` : '';
-  const kwLine = kwList.length ? `CRITICAL: User wants: ${kwList.join(', ')}. Exclude anything that doesn't serve these — e.g. no Greek taverna for a Burger search.` : '';
+  const mealLine = meal ? `CRITICAL RULE: You MUST ONLY include places that actually serve ${meal}. Any place that does not serve ${meal} must be completely removed from your JSON array.` : '';
+  const kwLine = kwList.length
+    ? `CRITICAL RULE: The user specifically wants ${kwList.join(' OR ')}. 
+You MUST ONLY include places that directly serve or specialise in these items.
+EXCLUDE: bars that don't serve food, venues that don't match the cuisine, anything unrelated.
+EXAMPLES OF WHAT TO EXCLUDE:
+- Searching "Burgers" → EXCLUDE Greek restaurants, Italian restaurants, bars, any place that doesn't serve burgers
+- Searching "Pizza" → EXCLUDE bars, Asian restaurants, anything not pizza-focused  
+- Searching "Family Friendly" → EXCLUDE bars, nightclubs, cocktail bars, adult venues
+If fewer than 3 places match, only return the ones that do match — DO NOT pad with unrelated places.` : '';
 
   const list = places.map((p, i) => {
     const fsq = p.fsqTips > 0 ? `, Foursquare: ${p.fsqTips} tips` : '';
@@ -216,14 +281,26 @@ async function doSearch(location, meal, foodStyles, keywords) {
   const coords = await geocode(location);
   const radius = smartRadius(location, coords.types);
   const query = buildQuery(meal, foodStyles, keywords);
+  const excludeTypes = getExcludeTypes(meal, keywords);
 
-  const [googleRaw, fsqRaw] = await Promise.all([
+  // Run keyword-specific AND general searches in parallel
+  const searchPromises = [
     googleSearch(coords.lat, coords.lng, query, radius),
     foursquareSearch(coords.lat, coords.lng, query, radius),
-  ]);
+  ];
+
+  // If keywords selected, also run general cafe/restaurant search so we don't miss gems
+  if (keywords?.length || foodStyles?.length) {
+    searchPromises.push(googleSearch(coords.lat, coords.lng, 'cafe restaurant', radius));
+  }
+
+  const [googleRaw1, fsqRaw, googleRaw2] = await Promise.all(searchPromises);
+  const googleRawAll = [...(googleRaw1 || []), ...(googleRaw2 || [])];
+  const seenIds = new Set();
+  const googleRaw = googleRawAll.filter(p => { if (seenIds.has(p.place_id)) return false; seenIds.add(p.place_id); return true; });
 
   let googleInRange = hardFilter(googleRaw, coords.lat, coords.lng, radius);
-  const fsqInRange  = fsqRaw.filter(p => {
+  const fsqInRange  = (fsqRaw || []).filter(p => {
     const lat = p.geocodes?.main?.latitude;
     const lng = p.geocodes?.main?.longitude;
     if (!lat || !lng) return false;
@@ -233,11 +310,17 @@ async function doSearch(location, meal, foodStyles, keywords) {
   // Widen if too few results
   if (googleInRange.length < 4) {
     const wider = await googleSearch(coords.lat, coords.lng, query, Math.round(radius * 1.5));
-    const widenedFiltered = hardFilter(wider, coords.lat, coords.lng, Math.round(radius * 1.5));
-    googleInRange = widenedFiltered;
+    googleInRange = hardFilter(wider, coords.lat, coords.lng, Math.round(radius * 1.5));
   }
 
-  const googleFiltered = googleInRange.filter(p => (p.rating || 0) >= 3.8 && (p.user_ratings_total || 0) >= 5);
+  // Hard exclude unwanted venue types (bars for Family Friendly, night clubs for Breakfast etc)
+  const googleFiltered = googleInRange.filter(p => {
+    if ((p.rating || 0) < 3.8 || (p.user_ratings_total || 0) < 5) return false;
+    if (excludeTypes.size > 0 && p.types) {
+      if (p.types.some(t => excludeTypes.has(t))) return false;
+    }
+    return true;
+  });
 
   const enriched = googleFiltered.map(gPlace => {
     let bestFsq = null, bestSim = 0;
@@ -400,6 +483,7 @@ export default function App() {
   const scrollRef = useRef(null);
 
   const [location, setLocation]     = useState('');
+  const [locating, setLocating]      = useState(false);
   const [selMeal, setSelMeal]       = useState('');
   const [selStyles, setSelStyles]   = useState([]);
   const [selKws, setSelKws]         = useState([]);
@@ -422,6 +506,36 @@ export default function App() {
   }
   function toggleKw(k) {
     setSelKws(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
+  }
+
+  async function getMyLocation() {
+    setLocating(true);
+    setError('');
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setError('Location permission denied. Type your location instead.');
+        setLocating(false);
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude, longitude } = pos.coords;
+      // Reverse geocode to get suburb name
+      const geo = await Location.reverseGeocodeAsync({ latitude, longitude });
+      if (geo && geo.length > 0) {
+        const g = geo[0];
+        const suburb = g.district || g.subregion || g.city || g.region || '';
+        const city   = g.city || g.region || '';
+        const label  = suburb && city && suburb !== city ? `${suburb}, ${city}` : suburb || city || `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+        setLocation(label);
+      } else {
+        setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+      }
+    } catch (e) {
+      setError('Could not get location. Type it instead.');
+    } finally {
+      setLocating(false);
+    }
   }
 
   async function search() {
@@ -486,12 +600,37 @@ export default function App() {
           {/* ── LOCATION INPUT ── */}
           <View style={s.section}>
             <Text style={[s.secLabel, { fontSize: S.fs(10, 12) }]}>WHERE?</Text>
-            <Text style={[s.secHint, { fontSize: S.fs(11, 13) }]}>be specific — street, suburb or area</Text>
+
+            {/* Geo locate button */}
+            <TouchableOpacity
+              style={[s.geoBtn, locating && { opacity: 0.6 }]}
+              onPress={getMyLocation}
+              disabled={locating}
+              activeOpacity={0.8}
+            >
+              {locating ? (
+                <ActivityIndicator color={C.green} size="small" />
+              ) : (
+                <Text style={{ fontSize: S.fs(14, 16) }}>📍</Text>
+              )}
+              <Text style={[s.geoBtnTxt, { fontSize: S.fs(13, 15) }]}>
+                {locating ? 'finding your location…' : 'use my current location'}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Divider */}
+            <View style={s.divider}>
+              <View style={s.dividerLine} />
+              <Text style={[s.dividerTxt, { fontSize: S.fs(10, 12) }]}>or search an area</Text>
+              <View style={s.dividerLine} />
+            </View>
+
+            {/* Manual input */}
             <View style={[s.inputWrap, { borderColor: location ? C.green : C.border2 }]}>
-              <Text style={{ fontSize: S.fs(14, 16), marginRight: 8, opacity: 0.4 }}>📍</Text>
+              <Text style={{ fontSize: S.fs(14, 16), marginRight: 8, opacity: 0.4 }}>🔍</Text>
               <TextInput
                 style={[s.input, { fontSize: S.fs(15, 18) }]}
-                placeholder="201 Sussex St Sydney · Umina Beach…"
+                placeholder="suburb, city or street…"
                 placeholderTextColor={C.dim}
                 value={location}
                 onChangeText={setLocation}
@@ -634,6 +773,13 @@ export default function App() {
 const s = StyleSheet.create({
   root:         { flex: 1, backgroundColor: C.bg },
   scrollContent:{ paddingHorizontal: 16, paddingTop: 0, paddingBottom: 40 },
+
+  // Geo button
+  geoBtn:       { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: 'rgba(0,230,118,0.08)', borderWidth: 1, borderColor: 'rgba(0,230,118,0.25)', borderRadius: 10, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 12 },
+  geoBtnTxt:    { color: C.green, fontWeight: '700', flex: 1 },
+  divider:      { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  dividerLine:  { flex: 1, height: 1, backgroundColor: C.border },
+  dividerTxt:   { color: C.dim, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
 
   // Header
   hdr:          { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.border, backgroundColor: C.bg },
