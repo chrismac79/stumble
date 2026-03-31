@@ -1,7 +1,31 @@
 {
-  "extra": {
-    "eas": {
-      "projectId": "a2da937e-fd84-4026-940c-90560b0a5fcd"
+  "expo": {
+    "name": "stumble",
+    "slug": "stumble",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a0a"
+      },
+      "package": "com.stumble.fooddiscovery"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.stumble.fooddiscovery"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a2da937e-fd84-4026-940c-90560b0a5fcd"
+      }
     }
   }
 }
