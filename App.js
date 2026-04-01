@@ -520,16 +520,33 @@ export default function App() {
       }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const { latitude, longitude } = pos.coords;
+
       // Reverse geocode to get suburb name
       const geo = await Location.reverseGeocodeAsync({ latitude, longitude });
       if (geo && geo.length > 0) {
         const g = geo[0];
-        const suburb = g.district || g.subregion || g.city || g.region || '';
-        const city   = g.city || g.region || '';
-        const label  = suburb && city && suburb !== city ? `${suburb}, ${city}` : suburb || city || `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+        // Try to get the most specific useful location — street number + street, or suburb
+        const streetNum  = g.streetNumber || '';
+        const street     = g.street || '';
+        const suburb     = g.district || g.subregion || g.city || '';
+        const state      = g.region || '';
+
+        let label = '';
+        if (streetNum && street && suburb) {
+          label = `${streetNum} ${street}, ${suburb}`;
+        } else if (street && suburb) {
+          label = `${street}, ${suburb}`;
+        } else if (suburb && state) {
+          label = `${suburb}, ${state}`;
+        } else if (suburb) {
+          label = suburb;
+        } else {
+          // Fallback to coordinates — Google geocode handles these well
+          label = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+        }
         setLocation(label);
       } else {
-        setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+        setLocation(`${latitude.toFixed(5)}, ${longitude.toFixed(5)}`);
       }
     } catch (e) {
       setError('Could not get location. Type it instead.');
