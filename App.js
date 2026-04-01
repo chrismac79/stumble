@@ -202,15 +202,30 @@ async function geocode(place) {
   return { lat: res.geometry.location.lat, lng: res.geometry.location.lng, types: res.types };
 }
 
-async function googleSearch(lat, lng, query, radius) {
+async function googleSearch(lat, lng, query, radius, locationName = '') {
   const base = 'https://maps.googleapis.com/maps/api/place';
-  const urls = [
+
+  // Build search URLs — text search uses Google relevance ranking
+  const searches = [
+    // Specific keyword query
     `${base}/textsearch/json?query=${encodeURIComponent(query)}&location=${lat},${lng}&radius=${radius}&key=${PLACES_KEY}`,
+    // Nearby prominence — returns well-known local places
     `${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=cafe&rankby=prominence&key=${PLACES_KEY}`,
     `${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=restaurant&rankby=prominence&key=${PLACES_KEY}`,
     `${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=bakery&rankby=prominence&key=${PLACES_KEY}`,
   ];
-  const results = await Promise.all(urls.map(u => fetch(u).then(r => r.json())));
+
+  // If we have a location name, add a "best cafe/restaurant [location]" search
+  // This is how a human would search and surfaces hidden gems
+  if (locationName) {
+    const locClean = locationName.replace(/,.*$/, '').trim(); // take first part before comma
+    searches.push(
+      `${base}/textsearch/json?query=${encodeURIComponent('best cafe ' + locClean)}&location=${lat},${lng}&radius=${radius}&key=${PLACES_KEY}`,
+      `${base}/textsearch/json?query=${encodeURIComponent('best restaurant ' + locClean)}&location=${lat},${lng}&radius=${radius}&key=${PLACES_KEY}`
+    );
+  }
+
+  const results = await Promise.all(searches.map(u => fetch(u).then(r => r.json())));
   const all = results.flatMap(d => d.results || []);
   const seen = new Set();
   return all.filter(p => { if (seen.has(p.place_id)) return false; seen.add(p.place_id); return true; });
