@@ -525,11 +525,11 @@ export default function App() {
       const geo = await Location.reverseGeocodeAsync({ latitude, longitude });
       if (geo && geo.length > 0) {
         const g = geo[0];
-        // Try to get the most specific useful location — street number + street, or suburb
-        const streetNum  = g.streetNumber || '';
-        const street     = g.street || '';
-        const suburb     = g.district || g.subregion || g.city || '';
-        const state      = g.region || '';
+        const streetNum = g.streetNumber || '';
+        const street    = g.street || '';
+        // Use city (actual suburb name) not district/subregion which returns council names
+        const suburb    = g.city || g.subregion || '';
+        const state     = g.region || '';
 
         let label = '';
         if (streetNum && street && suburb) {
@@ -541,7 +541,7 @@ export default function App() {
         } else if (suburb) {
           label = suburb;
         } else {
-          // Fallback to coordinates — Google geocode handles these well
+          // Raw coords — Google geocodes these perfectly
           label = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
         }
         setLocation(label);
