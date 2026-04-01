@@ -185,7 +185,9 @@ function buildQuery(meal, foodStyles, keywords) {
 
 // ─── API CALLS ────────────────────────────────────────────────────────────────
 async function geocode(place) {
-  const r = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(place)}&key=${PLACES_KEY}`);
+  // Append Australia if no country hint — improves accuracy for AU addresses
+  const query = place.includes('Australia') || place.match(/,\s*[A-Z]{2,3}$/) ? place : `${place}, Australia`;
+  const r = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${PLACES_KEY}`);
   const d = await r.json();
   if (!d.results?.length) throw new Error(`Could not find: ${place}`);
   const res = d.results[0];
