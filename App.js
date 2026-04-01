@@ -81,9 +81,17 @@ function stumbleScore(gPlace, fsqMatch) {
   const gReviews = gPlace.user_ratings_total || 0;
   const gPhotos  = gPlace.photos?.length || 0;
   const gPrice   = gPlace.price_level || 2;
-  const googleScore       = gRating * Math.log10(Math.max(gReviews, 1) + 1);
+
+  // Use square root instead of log so low review counts don't kill good new places
+  // A place with 4.8 stars and 30 reviews scores better than 4.2 stars and 500 reviews
+  const googleScore       = gRating * Math.sqrt(Math.max(gReviews, 1));
+  // Normalise so scores stay reasonable — divide by 20
+  const normalisedGoogle  = googleScore / 20;
   const photoBonus        = Math.min(gPhotos * 0.15, 3.0);
-  const priceQualityBonus = gRating >= 4.2 ? (5 - gPrice) * 0.4 : 0;
+  // Stronger price-quality bonus — cheap + great is what stumble is all about
+  const priceQualityBonus = gRating >= 4.2 ? (5 - gPrice) * 0.6 : 0;
+  // High rating bonus — 4.5+ gets extra push regardless of review count
+  const highRatingBonus   = gRating >= 4.5 ? 2.0 : gRating >= 4.3 ? 1.0 : 0;
   let fsqScore = 0, fsqTips = 0, fsqTastes = [];
   if (fsqMatch) {
     const fsqRating  = (fsqMatch.rating || 0) / 2;
@@ -94,9 +102,9 @@ function stumbleScore(gPlace, fsqMatch) {
   }
   const crossBonus        = fsqMatch ? 2.5 : 0;
   const consistencyBonus  = fsqMatch && gRating >= 4.0 && (fsqMatch.rating || 0) / 2 >= 4.0 ? 1.5 : 0;
-  const sweetSpotBonus    = gReviews >= 50 && gReviews <= 800 ? 1.0 : 0;
+  const sweetSpotBonus    = gReviews >= 20 && gReviews <= 800 ? 1.0 : 0;
   return {
-    total: googleScore + photoBonus + priceQualityBonus + fsqScore + crossBonus + consistencyBonus + sweetSpotBonus,
+    total: normalisedGoogle + photoBonus + priceQualityBonus + highRatingBonus + fsqScore + crossBonus + consistencyBonus + sweetSpotBonus,
     fsqTips, fsqTastes, isVerified: !!fsqMatch, fsqRating: fsqMatch?.rating || null,
   };
 }
@@ -116,8 +124,8 @@ function smartRadius(place, types) {
 
 // Maps each keyword to a specific Google Places search term
 const KW_QUERY_MAP = {
-  'Burgers':        'burger restaurant',
-  'Fried Chicken':  'fried chicken',
+  'Burgers':        'burger chicken burger restaurant',
+  'Fried Chicken':  'fried chicken charcoal chicken',
   'Pizza':          'pizza restaurant',
   'Pie':            'pie shop bakery',
   'Fish & Chips':   'fish and chips',
@@ -317,7 +325,7 @@ async function doSearch(location, meal, foodStyles, keywords) {
 
   // Hard exclude unwanted venue types (bars for Family Friendly, night clubs for Breakfast etc)
   const googleFiltered = googleInRange.filter(p => {
-    if ((p.rating || 0) < 3.8 || (p.user_ratings_total || 0) < 5) return false;
+    if ((p.rating || 0) < 3.8 || (p.user_ratings_total || 0) < 3) return false;
     if (excludeTypes.size > 0 && p.types) {
       if (p.types.some(t => excludeTypes.has(t))) return false;
     }
