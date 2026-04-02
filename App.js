@@ -124,8 +124,8 @@ function smartRadius(place, types) {
 
 // Maps each keyword to a specific Google Places search term
 const KW_QUERY_MAP = {
-  'Burgers':        'burger chicken burger restaurant',
-  'Fried Chicken':  'fried chicken charcoal chicken',
+  'Burgers':        'burger chicken burger charcoal chicken portuguese chicken restaurant',
+  'Fried Chicken':  'fried chicken charcoal chicken portuguese chicken',
   'Pizza':          'pizza restaurant',
   'Pie':            'pie shop bakery',
   'Fish & Chips':   'fish and chips',
@@ -339,13 +339,23 @@ async function doSearch(location, meal, foodStyles, keywords) {
   }
 
   // Hard exclude unwanted venue types (bars for Family Friendly, night clubs for Breakfast etc)
-  const googleFiltered = googleInRange.filter(p => {
+  let googleFiltered = googleInRange.filter(p => {
     if ((p.rating || 0) < 3.8 || (p.user_ratings_total || 0) < 3) return false;
     if (excludeTypes.size > 0 && p.types) {
       if (p.types.some(t => excludeTypes.has(t))) return false;
     }
     return true;
   });
+  // If fewer than 5 after strict filter, relax rating to 3.5
+  if (googleFiltered.length < 5) {
+    googleFiltered = googleInRange.filter(p => {
+      if ((p.rating || 0) < 3.5 || (p.user_ratings_total || 0) < 3) return false;
+      if (excludeTypes.size > 0 && p.types) {
+        if (p.types.some(t => excludeTypes.has(t))) return false;
+      }
+      return true;
+    });
+  }
 
   const enriched = googleFiltered.map(gPlace => {
     let bestFsq = null, bestSim = 0;
@@ -399,6 +409,23 @@ function GemCard({ item, index, S }) {
   const [tipOpen, setTipOpen] = useState(false);
 
   const priceLabel = { 1: '$', 2: '$$', 3: '$$$', 4: '$$$$' }[item.priceLevel] || item.priceRange || '$$';
+
+  const openMaps = async () => {
+    try {
+      // Try place_id URL first, fall back to search URL
+      const placeUrl = item.mapsUrl || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((item.name || '') + ' ' + (item.area || ''))}`;
+      const canOpen = await Linking.canOpenURL(placeUrl);
+      if (canOpen) {
+        await Linking.openURL(placeUrl);
+      } else {
+        // Fallback to basic maps search
+        const fallback = `https://maps.google.com/?q=${encodeURIComponent((item.name || '') + ' ' + (item.area || ''))}`;
+        await Linking.openURL(fallback);
+      }
+    } catch (e) {
+      console.log('Maps open error:', e);
+    }
+  };
 
   return (
     <View style={[s.card, { borderColor: C.border }]}>
@@ -730,7 +757,7 @@ export default function App() {
             {loading ? (
               <ActivityIndicator color="#000" size="small" />
             ) : (
-              <Text style={[s.searchBtnTxt, { fontSize: S.fs(15, 18) }]}>find hidden gems</Text>
+              <Text style={[s.searchBtnTxt, { fontSize: S.fs(15, 18) }]}>stumble onto something good</Text>
             )}
           </TouchableOpacity>
 
