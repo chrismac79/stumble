@@ -124,36 +124,37 @@ function smartRadius(place, types) {
   return 1100;
 }
 
-// Maps each keyword to a specific Google Places search term
-const KW_QUERY_MAP = {
-  'Burgers':        'burger chicken burger charcoal chicken portuguese chicken restaurant',
-  'Fried Chicken':  'fried chicken charcoal chicken portuguese chicken',
-  'Pizza':          'pizza restaurant',
-  'Pie':            'pie shop bakery',
-  'Fish & Chips':   'fish and chips',
-  'Tacos':          'tacos mexican',
-  'Dumplings':      'dumplings chinese restaurant',
-  'Ramen':          'ramen japanese',
-  'Pasta':          'pasta italian restaurant',
-  'Steak':          'steak restaurant',
-  'Seafood':        'seafood restaurant',
-  'Vegan':          'vegan restaurant cafe',
-  'Dessert':        'dessert cafe bakery',
-  'Coffee':         'cafe coffee',
-  'Cocktails':      'cocktail bar',
-  'Cheap Eats':     'casual dining cheap eats',
-  'BYO':            'BYO restaurant',
-  'Date Night':     'restaurant dinner',
-  'Family Friendly':'family restaurant cafe',
+// TEXT-FIRST SEARCH — multiple human-style phrases per keyword
+// "best burger Sydney CBD" surfaces Bar Luca the way Google Maps would
+const KW_TEXT_QUERIES = {
+  'Burgers':        ['best burger', 'burger joint', 'smash burger', 'chicken burger', 'charcoal chicken burger', 'portuguese chicken'],
+  'Fried Chicken':  ['best fried chicken', 'charcoal chicken', 'portuguese chicken', 'crispy fried chicken'],
+  'Pizza':          ['best pizza', 'pizza restaurant', 'wood fired pizza', 'neapolitan pizza'],
+  'Pie':            ['best pie', 'pie shop', 'meat pie', 'bakery pies'],
+  'Fish & Chips':   ['best fish and chips', 'fish and chip shop', 'seafood takeaway'],
+  'Tacos':          ['best tacos', 'mexican restaurant', 'taqueria'],
+  'Dumplings':      ['best dumplings', 'dumpling house', 'dim sum', 'yum cha'],
+  'Ramen':          ['best ramen', 'ramen restaurant', 'japanese noodles', 'tonkotsu ramen'],
+  'Pasta':          ['best pasta', 'italian restaurant', 'pasta restaurant', 'trattoria'],
+  'Steak':          ['best steak', 'steakhouse', 'steak restaurant', 'grill'],
+  'Seafood':        ['best seafood', 'seafood restaurant', 'fish restaurant', 'oyster bar'],
+  'Vegan':          ['best vegan restaurant', 'plant based restaurant', 'vegan cafe'],
+  'Dessert':        ['best dessert', 'dessert cafe', 'patisserie', 'cake shop'],
+  'Coffee':         ['best coffee', 'specialty coffee', 'best cafe', 'espresso bar'],
+  'Cocktails':      ['best cocktails', 'cocktail bar', 'craft cocktails'],
+  'Cheap Eats':     ['cheap eats', 'best value restaurant', 'affordable eats'],
+  'BYO':            ['BYO restaurant', 'bring your own restaurant'],
+  'Date Night':     ['best date night restaurant', 'romantic restaurant', 'fine dining'],
+  'Family Friendly':['family restaurant', 'family friendly cafe', 'kids friendly restaurant'],
 };
 
-const MEAL_QUERY_MAP = {
-  'Breakfast':       'breakfast cafe',
-  'Brunch':          'brunch cafe',
-  'Lunch':           'lunch cafe restaurant',
-  'Dinner':          'dinner restaurant',
-  'Coffee & Snacks': 'cafe coffee',
-  'Late Night':      'late night restaurant',
+const MEAL_TEXT_QUERIES = {
+  'Breakfast':       ['best breakfast', 'breakfast cafe', 'morning cafe', 'best brunch'],
+  'Brunch':          ['best brunch', 'brunch cafe', 'weekend brunch'],
+  'Lunch':           ['best lunch', 'lunch spot', 'lunch cafe', 'lunch restaurant'],
+  'Dinner':          ['best dinner', 'dinner restaurant', 'evening restaurant'],
+  'Coffee & Snacks': ['best coffee', 'best cafe', 'specialty coffee'],
+  'Late Night':      ['late night food', 'late night restaurant', 'open late'],
 };
 
 // Google Place types to EXCLUDE based on keywords/meal
@@ -197,21 +198,46 @@ function getExcludeTypes(meal, keywords) {
   return excluded;
 }
 
-function buildQuery(meal, foodStyles, keywords) {
-  const parts = [];
-  // Keywords take priority — they are the most specific signal
-  if (keywords?.length) {
-    keywords.forEach(k => {
-      if (KW_QUERY_MAP[k]) parts.push(KW_QUERY_MAP[k]);
+function buildTextQueries(meal, foodStyles, keywords, locationName) {
+  const loc = locationName ? locationName.replace(/,.*$/, '').trim() : '';
+  const queries = [];
+  const seen = new Set();
+
+  function addQuery(q) {
+    const full = loc ? q + ' ' + loc : q;
+    if (!seen.has(full)) { seen.add(full); queries.push(full); }
+  }
+
+  // Keywords first — most specific signal
+  if (keywords && keywords.length) {
+    keywords.forEach(function(k) {
+      const kq = KW_TEXT_QUERIES[k] || [];
+      kq.forEach(function(q) { addQuery(q); });
     });
   }
-  // Food styles next
-  if (foodStyles?.length) parts.push(...foodStyles);
-  // Meal type if nothing else
-  if (!parts.length && meal && MEAL_QUERY_MAP[meal]) parts.push(MEAL_QUERY_MAP[meal]);
-  if (!parts.length) parts.push('cafe restaurant food');
-  // Return the most specific query (first keyword match)
-  return parts[0] || 'cafe restaurant food';
+
+  // Meal queries
+  if (meal) {
+    const mq = MEAL_TEXT_QUERIES[meal] || [];
+    mq.forEach(function(q) { addQuery(q); });
+  }
+
+  // Food styles
+  if (foodStyles && foodStyles.length) {
+    foodStyles.forEach(function(s) { addQuery('best ' + s.toLowerCase()); });
+  }
+
+  // Always add generic location quality searches to catch hidden gems
+  if (loc) {
+    addQuery('best cafe ' + loc);
+    addQuery('best restaurant ' + loc);
+    addQuery('hidden gem ' + loc);
+  } else {
+    addQuery('best cafe');
+    addQuery('best restaurant');
+  }
+
+  return queries.slice(0, 6);
 }
 
 // ─── API CALLS ────────────────────────────────────────────────────────────────
@@ -225,31 +251,29 @@ async function geocode(place) {
   return { lat: res.geometry.location.lat, lng: res.geometry.location.lng, types: res.types };
 }
 
-async function googleSearch(lat, lng, query, radius, locationName = '') {
+async function googleSearch(lat, lng, textQueries, radius) {
   const base = 'https://maps.googleapis.com/maps/api/place';
 
-  // Build search URLs — text search uses Google relevance ranking
-  const searches = [
-    // Specific keyword query
-    `${base}/textsearch/json?query=${encodeURIComponent(query)}&location=${lat},${lng}&radius=${radius}&key=${PLACES_KEY}`,
-    // Nearby prominence — returns well-known local places
-    `${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=cafe&rankby=prominence&key=${PLACES_KEY}`,
-    `${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=restaurant&rankby=prominence&key=${PLACES_KEY}`,
-    `${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=bakery&rankby=prominence&key=${PLACES_KEY}`,
+  // TEXT-FIRST APPROACH — search the way a human would
+  // "best burger Bridge St Sydney" surfaces Bar Luca
+  // "best breakfast Umina Beach" surfaces Ronto
+  const textSearches = textQueries.map(q =>
+    fetch(`${base}/textsearch/json?query=${encodeURIComponent(q)}&location=${lat},${lng}&radius=${radius}&key=${PLACES_KEY}`)
+      .then(r => r.json())
+  );
+
+  // Nearby searches as safety net — catches anything text search misses
+  // Include ALL food-relevant types including bar (Bar Luca) and bakery
+  const nearbySearches = [
+    fetch(`${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=restaurant&rankby=prominence&key=${PLACES_KEY}`).then(r => r.json()),
+    fetch(`${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=cafe&rankby=prominence&key=${PLACES_KEY}`).then(r => r.json()),
+    fetch(`${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=bar&rankby=prominence&key=${PLACES_KEY}`).then(r => r.json()),
+    fetch(`${base}/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=bakery&rankby=prominence&key=${PLACES_KEY}`).then(r => r.json()),
   ];
 
-  // If we have a location name, add a "best cafe/restaurant [location]" search
-  // This is how a human would search and surfaces hidden gems
-  if (locationName) {
-    const locClean = locationName.replace(/,.*$/, '').trim(); // take first part before comma
-    searches.push(
-      `${base}/textsearch/json?query=${encodeURIComponent('best cafe ' + locClean)}&location=${lat},${lng}&radius=${radius}&key=${PLACES_KEY}`,
-      `${base}/textsearch/json?query=${encodeURIComponent('best restaurant ' + locClean)}&location=${lat},${lng}&radius=${radius}&key=${PLACES_KEY}`
-    );
-  }
-
-  const results = await Promise.all(searches.map(u => fetch(u).then(r => r.json())));
+  const results = await Promise.all([...textSearches, ...nearbySearches]);
   const all = results.flatMap(d => d.results || []);
+  // Text search results come first — they get priority in dedup
   const seen = new Set();
   return all.filter(p => { if (seen.has(p.place_id)) return false; seen.add(p.place_id); return true; });
 }
@@ -328,24 +352,15 @@ Each object needs: name, area, category, rating (string), reviewCount (string), 
 async function doSearch(location, meal, foodStyles, keywords) {
   const coords = await geocode(location);
   const radius = smartRadius(location, coords.types);
-  const query = buildQuery(meal, foodStyles, keywords);
+  const textQueries = buildTextQueries(meal, foodStyles, keywords, location);
+  const fsqQuery = (keywords && keywords.length ? keywords[0] : meal) || 'cafe restaurant';
   const excludeTypes = getExcludeTypes(meal, keywords);
 
-  // Run keyword-specific AND general searches in parallel
-  const searchPromises = [
-    googleSearch(coords.lat, coords.lng, query, radius),
-    foursquareSearch(coords.lat, coords.lng, query, radius),
-  ];
-
-  // If keywords selected, also run general cafe/restaurant search so we don't miss gems
-  if (keywords?.length || foodStyles?.length) {
-    searchPromises.push(googleSearch(coords.lat, coords.lng, 'cafe restaurant', radius));
-  }
-
-  const [googleRaw1, fsqRaw, googleRaw2] = await Promise.all(searchPromises);
-  const googleRawAll = [...(googleRaw1 || []), ...(googleRaw2 || [])];
-  const seenIds = new Set();
-  const googleRaw = googleRawAll.filter(p => { if (seenIds.has(p.place_id)) return false; seenIds.add(p.place_id); return true; });
+  // TEXT-FIRST: run all human-style queries in parallel
+  const [googleRaw, fsqRaw] = await Promise.all([
+    googleSearch(coords.lat, coords.lng, textQueries, radius),
+    foursquareSearch(coords.lat, coords.lng, fsqQuery, radius),
+  ]);
 
   let googleInRange = hardFilter(googleRaw, coords.lat, coords.lng, radius);
   const fsqInRange  = (fsqRaw || []).filter(p => {
@@ -357,12 +372,12 @@ async function doSearch(location, meal, foodStyles, keywords) {
 
   // Widen progressively until we have enough results
   if (googleInRange.length < 5) {
-    const wider = await googleSearch(coords.lat, coords.lng, query, Math.round(radius * 1.5), locationName);
+    const wider = await googleSearch(coords.lat, coords.lng, textQueries, Math.round(radius * 1.5));
     const widenedInRange = hardFilter(wider, coords.lat, coords.lng, Math.round(radius * 1.5));
     if (widenedInRange.length > googleInRange.length) googleInRange = widenedInRange;
   }
   if (googleInRange.length < 5) {
-    const wider2 = await googleSearch(coords.lat, coords.lng, query, Math.round(radius * 2.5), locationName);
+    const wider2 = await googleSearch(coords.lat, coords.lng, textQueries, Math.round(radius * 2.5));
     const widenedInRange2 = hardFilter(wider2, coords.lat, coords.lng, Math.round(radius * 2.5));
     if (widenedInRange2.length > googleInRange.length) googleInRange = widenedInRange2;
   }
