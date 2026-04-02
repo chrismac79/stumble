@@ -328,25 +328,48 @@ Return ONLY a raw JSON array. No markdown. No backticks. Start with [ end with ]
 
 Each object needs: name, area, category, rating (string), reviewCount (string), foursquareTips (string or ""), tastes (string, tags joined with · or ""), priceRange ("$"/"$$"/"$$$"), isVerified (bool), description (2-3 sentences local voice), mustTry (string), vibe (3-5 words), insiderTip (string), emoji (one emoji)`;
 
-  const models = ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
+  let lastErr = '';
   for (const model of models) {
     try {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 3000 } })
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 2500 } })
       });
       const d = await r.json();
-      if (!r.ok || d.error) continue;
+      if (!r.ok || d.error) {
+        lastErr = d.error?.message || `${model} failed (${r.status})`;
+        // If rate limited wait 8 seconds and retry same model once
+        if (r.status === 429) {
+          await new Promise(res => setTimeout(res, 8000));
+          const r2 = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 2500 } })
+          });
+          const d2 = await r2.json();
+          if (r2.ok && !d2.error) {
+            let text2 = d2.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            text2 = text2.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+            if (text2) {
+              const s2 = text2.indexOf('['), e2 = text2.lastIndexOf(']');
+              if (s2 !== -1 && e2 !== -1) return JSON.parse(text2.slice(s2, e2 + 1));
+            }
+          }
+          lastErr = d2.error?.message || 'rate limit retry failed';
+        }
+        continue;
+      }
       let text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
       text = text.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
-      if (!text) continue;
+      if (!text) { lastErr = `${model} empty response`; continue; }
       const s = text.indexOf('['), e = text.lastIndexOf(']');
-      if (s === -1 || e === -1) continue;
+      if (s === -1 || e === -1) { lastErr = `${model} bad JSON`; continue; }
       return JSON.parse(text.slice(s, e + 1));
-    } catch { continue; }
+    } catch (err) { lastErr = err.message; continue; }
   }
-  throw new Error('Could not get descriptions. Try again.');
+  throw new Error(`Could not get descriptions: ${lastErr}`);
 }
 
 async function doSearch(location, meal, foodStyles, keywords) {
