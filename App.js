@@ -111,15 +111,16 @@ function stumbleScore(gPlace, fsqMatch) {
 
 function smartRadius(place, types) {
   const p = place.toLowerCase();
+  // Street address = search whole suburb area not just 350m from front door
   if (types.includes('street_address') || types.includes('route') ||
       p.includes(' st') || p.includes(' street') || p.includes(' rd') ||
-      p.includes(' ave') || p.includes(' lane')) return 350;
-  if (types.includes('neighborhood') || types.includes('sublocality')) return 700;
+      p.includes(' ave') || p.includes(' lane')) return 1100;
+  if (types.includes('neighborhood') || types.includes('sublocality')) return 900;
   if (types.includes('locality') || types.includes('postal_code')) {
     const big = ['sydney','melbourne','brisbane','perth','adelaide','canberra'];
-    return big.some(c => p.includes(c)) ? 1200 : 900;
+    return big.some(c => p.includes(c)) ? 1400 : 1100;
   }
-  return 900;
+  return 1100;
 }
 
 // Maps each keyword to a specific Google Places search term
@@ -332,10 +333,16 @@ async function doSearch(location, meal, foodStyles, keywords) {
     return haversineKm(coords.lat, coords.lng, lat, lng) <= radius / 1000;
   });
 
-  // Widen if too few results
-  if (googleInRange.length < 4) {
-    const wider = await googleSearch(coords.lat, coords.lng, query, Math.round(radius * 1.5));
-    googleInRange = hardFilter(wider, coords.lat, coords.lng, Math.round(radius * 1.5));
+  // Widen progressively until we have enough results
+  if (googleInRange.length < 5) {
+    const wider = await googleSearch(coords.lat, coords.lng, query, Math.round(radius * 1.5), locationName);
+    const widenedInRange = hardFilter(wider, coords.lat, coords.lng, Math.round(radius * 1.5));
+    if (widenedInRange.length > googleInRange.length) googleInRange = widenedInRange;
+  }
+  if (googleInRange.length < 5) {
+    const wider2 = await googleSearch(coords.lat, coords.lng, query, Math.round(radius * 2.5), locationName);
+    const widenedInRange2 = hardFilter(wider2, coords.lat, coords.lng, Math.round(radius * 2.5));
+    if (widenedInRange2.length > googleInRange.length) googleInRange = widenedInRange2;
   }
 
   // Hard exclude unwanted venue types (bars for Family Friendly, night clubs for Breakfast etc)
@@ -636,7 +643,7 @@ export default function App() {
 
       {/* ── HEADER ── */}
       <View style={s.hdr}>
-        <Text style={[s.logo, { fontSize: S.fs(28, 36) }]}>stumble<Text style={{ color: C.green }}>.</Text></Text>
+        <Text style={[s.logo, { fontSize: S.fs(36, 46) }]}>stumble</Text>
         <View style={s.hdrBadge}>
           <View style={s.hdrDot} />
           <Text style={[s.hdrBadgeTxt, { fontSize: S.fs(9, 11) }]}>LIVE RECS</Text>
@@ -661,8 +668,8 @@ export default function App() {
               find the places{'\n'}
               <Text style={{ color: C.green }}>worth going to.</Text>
             </Text>
-            <Text style={[s.heroSub, { fontSize: S.fs(13, 16) }]}>
-              not just the obvious ones.
+            <Text style={[s.heroSub, { fontSize: S.fs(13, 15) }]}>
+              the stumble score cross-references Google & Foursquare to rank real local gems — not just the most reviewed places.
             </Text>
           </View>
 
