@@ -90,8 +90,9 @@ function stumbleScore(gPlace, fsqMatch) {
   const photoBonus        = Math.min(gPhotos * 0.15, 3.0);
   // Stronger price-quality bonus — cheap + great is what stumble is all about
   const priceQualityBonus = gRating >= 4.2 ? (5 - gPrice) * 0.6 : 0;
-  // High rating bonus — 4.5+ gets extra push regardless of review count
-  const highRatingBonus   = gRating >= 4.5 ? 2.0 : gRating >= 4.3 ? 1.0 : 0;
+  // High rating bonus — rewards quality regardless of review count
+  // This helps newer quality spots like Frangos Kent St (4.2★, recently opened)
+  const highRatingBonus   = gRating >= 4.5 ? 3.0 : gRating >= 4.2 ? 1.5 : 0;
   let fsqScore = 0, fsqTips = 0, fsqTastes = [];
   if (fsqMatch) {
     const fsqRating  = (fsqMatch.rating || 0) / 2;
@@ -158,13 +159,34 @@ const MEAL_QUERY_MAP = {
 // Google Place types to EXCLUDE based on keywords/meal
 const KW_EXCLUDE_TYPES = {
   'Family Friendly': ['bar','night_club','liquor_store'],
-  'Breakfast':       ['bar','night_club'],
-  'Brunch':          ['bar','night_club'],
-  'Coffee & Snacks': ['bar','night_club'],
-  'Burgers':         ['night_club'],
-  'Pizza':           ['night_club'],
-  'Vegan':           ['night_club'],
+  'Breakfast':       ['bar','night_club','liquor_store'],
+  'Brunch':          ['bar','night_club','liquor_store'],
+  'Coffee & Snacks': ['bar','night_club','liquor_store'],
+  'Burgers':         ['night_club','liquor_store'],
+  'Pizza':           ['night_club','liquor_store'],
+  'Vegan':           ['night_club','liquor_store'],
 };
+
+// Name-based exclusion — catches bowling clubs, RSLs, leagues clubs etc
+// UNLESS they have a food-specific word in their name (bistro, restaurant, cafe, kitchen)
+const EXCLUDE_NAME_KEYWORDS = [
+  'bowling club', 'bowling alley', 'rsl club', 'leagues club', 'bowls club',
+  'golf club', 'sports club', 'rugby club', 'cricket club', 'football club',
+  'soccer club', 'tennis club', 'netball club',
+];
+
+const FOOD_OVERRIDE_KEYWORDS = [
+  'bistro', 'restaurant', 'cafe', 'kitchen', 'dining', 'eatery', 'grill', 'brasserie'
+];
+
+function isExcludedVenue(place, meal, keywords) {
+  const name = (place.name || '').toLowerCase();
+  const isClub = EXCLUDE_NAME_KEYWORDS.some(k => name.includes(k));
+  if (!isClub) return false;
+  // If the name also contains a food keyword, keep it (e.g. "RSL Bistro", "Surf Club Restaurant")
+  const hasFood = FOOD_OVERRIDE_KEYWORDS.some(k => name.includes(k));
+  return !hasFood;
+}
 
 function getExcludeTypes(meal, keywords) {
   const excluded = new Set();
@@ -348,6 +370,7 @@ async function doSearch(location, meal, foodStyles, keywords) {
   // Hard exclude unwanted venue types (bars for Family Friendly, night clubs for Breakfast etc)
   let googleFiltered = googleInRange.filter(p => {
     if ((p.rating || 0) < 3.8 || (p.user_ratings_total || 0) < 3) return false;
+    if (isExcludedVenue(p, meal, keywords)) return false;
     if (excludeTypes.size > 0 && p.types) {
       if (p.types.some(t => excludeTypes.has(t))) return false;
     }
@@ -357,9 +380,7 @@ async function doSearch(location, meal, foodStyles, keywords) {
   if (googleFiltered.length < 5) {
     googleFiltered = googleInRange.filter(p => {
       if ((p.rating || 0) < 3.5 || (p.user_ratings_total || 0) < 3) return false;
-      if (excludeTypes.size > 0 && p.types) {
-        if (p.types.some(t => excludeTypes.has(t))) return false;
-      }
+      if (isExcludedVenue(p, meal, keywords)) return false;
       return true;
     });
   }
@@ -419,16 +440,10 @@ function GemCard({ item, index, S }) {
 
   const openMaps = async () => {
     try {
-      // Try place_id URL first, fall back to search URL
-      const placeUrl = item.mapsUrl || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((item.name || '') + ' ' + (item.area || ''))}`;
-      const canOpen = await Linking.canOpenURL(placeUrl);
-      if (canOpen) {
-        await Linking.openURL(placeUrl);
-      } else {
-        // Fallback to basic maps search
-        const fallback = `https://maps.google.com/?q=${encodeURIComponent((item.name || '') + ' ' + (item.area || ''))}`;
-        await Linking.openURL(fallback);
-      }
+      // Use https maps search URL — always works on Android without manifest changes
+      const query = encodeURIComponent((item.name || '') + ' ' + (item.area || ''));
+      const url = `https://www.google.com/maps/search/?api=1&query=${query}`;
+      await Linking.openURL(url);
     } catch (e) {
       console.log('Maps open error:', e);
     }
