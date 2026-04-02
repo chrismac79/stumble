@@ -328,7 +328,7 @@ Return ONLY a raw JSON array. No markdown. No backticks. Start with [ end with ]
 
 Each object needs: name, area, category, rating (string), reviewCount (string), foursquareTips (string or ""), tastes (string, tags joined with · or ""), priceRange ("$"/"$$"/"$$$"), isVerified (bool), description (2-3 sentences local voice), mustTry (string), vibe (3-5 words), insiderTip (string), emoji (one emoji)`;
 
-  const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b'];
+  const models = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash-lite'];
   let lastErr = '';
   for (const model of models) {
     try {
